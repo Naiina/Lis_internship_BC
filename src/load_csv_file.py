@@ -15,17 +15,22 @@ import contextlib
 import torchaudio
 import csv
 
+#to do: check no else wav is used since now we only have one wav per conv
 
-def convert_to_wav(path_m4a):
-    l_direct = os.listdir(path_m4a)
+def convert_to_wav(path, extention = 'm4a'):
+    l_direct = os.listdir(path)
     for direct in l_direct:
         #os.mkdir(path_wav+direct)
-        l_files_m4a = os.listdir(path_m4a+direct)
-        for file in l_files_m4a:
-            if 'm4a' in file:
-                if len(file) == 15:
-                    track = AudioSegment.from_file(path_m4a+'/'+direct+'/'+file,  format='m4a')
-                    file_handle = track.export(path_m4a+direct+'/'+file[:-3]+'wav', format='wav')
+        l_files = os.listdir(path+direct)
+        for file in l_files:
+            if extention in file:
+                if extention == 'm4a':
+                    if len(file) == 15: #if there is also one wav for both speakers, keep only the ones were each speaker is recodred speratly
+                        track = AudioSegment.from_file(path+'/'+direct+'/'+file,  format=extention)
+                        file_handle = track.export(path+direct+'/'+file[:-3]+'wav', format='wav')
+                if extention == 'mp4':
+                    track = AudioSegment.from_file(path+'/'+direct+'/'+file,  format=extention)
+                    file_handle = track.export(path+direct+'/'+file[:-3]+'wav', format='wav')
 
 def create_empty_csv(csv_path,csv_name):
     column_names = ["filename","label","nbframes","folder"] 
@@ -67,25 +72,25 @@ def extract_df_times_csv_file(data_csv,samplerate,A):
         df_r.columns =['onset', 'end', 'duration', 'label']
     return df_f,df_r
         
-def cut_one_wav(df,wav,backchannel_type,direct,folder,direct_cut,nb_frames_before_onset):
+def cut_one_wav(df,wav,backchannel_type,direct,folder,direct_cut,nb_frames_before_onset,nb_frames_after_offset,speaker):
     samplerate, data = wavfile.read(direct+folder+wav)
     s = len(df)
     for i in range (s):
         onset = int(get_onset(df,i))-nb_frames_before_onset
-        offset = int(get_end(df,i))
+        offset = int(get_end(df,i))+nb_frames_after_offset
         if onset+100<offset:
             newAudio = data[onset:offset]
-            write(direct_cut+'/'+folder+'/'+wav[:-4]+'_'+str(i)+'_'+backchannel_type+".wav", samplerate, newAudio.astype(np.int16))
+            write(direct_cut+'/'+folder+'/'+wav[:-4]+'_'+str(i)+'_'+backchannel_type+speaker+".wav", samplerate, newAudio.astype(np.int16))
     
-def cut_wav_file(data_csv,wav1,wav2,direct,folder,direct_cut,nb_frames_before_onset):
+def cut_wav_file(data_csv,wav1,wav2,direct,folder,direct_cut,nb_frames_before_onset,nb_frames_after_offset):
     samplerate, data = wavfile.read(direct+folder+wav1)
     df1_f,df1_r = extract_df_times_csv_file(data_csv,samplerate,'A1')
     df2_f,df2_r = extract_df_times_csv_file(data_csv,samplerate,'A2')
     
-    cut_one_wav(df1_f,wav1,"feedback",direct,folder,direct_cut,nb_frames_before_onset)
-    cut_one_wav(df2_f,wav2,"feedback",direct,folder,direct_cut,nb_frames_before_onset)
-    cut_one_wav(df1_r,wav1,"response",direct,folder,direct_cut,nb_frames_before_onset)
-    cut_one_wav(df2_r,wav2,"response",direct,folder,direct_cut,nb_frames_before_onset)
+    cut_one_wav(df1_f,wav1,"feedback",direct,folder,direct_cut,nb_frames_before_onset,nb_frames_after_offset,"A1")
+    cut_one_wav(df2_f,wav2,"feedback",direct,folder,direct_cut,nb_frames_before_onset,nb_frames_after_offset,"A2")
+    cut_one_wav(df1_r,wav1,"response",direct,folder,direct_cut,nb_frames_before_onset,nb_frames_after_offset,"A1")
+    cut_one_wav(df2_r,wav2,"response",direct,folder,direct_cut,nb_frames_before_onset,nb_frames_after_offset,"A2")
     
        
 def get_onset(df,i):
@@ -95,25 +100,40 @@ def get_end(df,i):
     return df.at[i, 'end']
 
 
-def search_extention_in_given_folder (folder,path,extention):
+def search_extention_in_given_folder (folder,path,extention,size = None):
     l_files = os.listdir(path+folder)
     l = []
+    
     for file in l_files:
         if file.endswith(extention):
-            l.append(file)
+            if size == None:
+                l.append(file)
+            else:
+                if len(file) == size:
+                    l.append(file)
     return l
 
-def cut_all_wav(path_rec,path_annot,path_cut,nb_frames_before_onset):
+def cut_all_wav(path_rec,path_annot,path_cut,nb_frames_before_onset,nb_frames_after_offset = 0,from_mp4_file = False):
     l_folder = os.listdir(path_rec) 
     for folder in l_folder:
-        os.mkdir(path_cut+folder)
-        folder = folder+'/'
-        [wav1,wav2] = search_extention_in_given_folder (folder,path_rec,".wav")
-        [csv_file] = search_extention_in_given_folder (folder,path_annot,".csv")
-        data_csv = path_annot+folder+csv_file
-        cut_wav_file(data_csv,wav1,wav2,path_rec,folder,path_cut,nb_frames_before_onset)
+        if not folder == "BC":
+            os.mkdir(path_cut+folder)
+            folder = folder+'/'
+            if not from_mp4_file:
+                [wav1,wav2] = search_extention_in_given_folder (folder,path_rec,".wav",15)
+                adult_1 = wav1[3:5]
+                wav1, wav2 = [wav1, wav2] if wav1[-6:-4] == adult_1 else [wav2, wav1]
+            if from_mp4_file:
+                l = search_extention_in_given_folder (folder,path_rec,".wav",12)
+                wav1 = l[0]
+                wav2= l[0]
+            [csv_file] = search_extention_in_given_folder (folder,path_annot,".csv")
+            data_csv = path_annot+folder+csv_file
+            cut_wav_file(data_csv,wav1,wav2,path_rec,folder,path_cut,nb_frames_before_onset,nb_frames_after_offset)
+            
+            
 
-def create_csv_from_cut_wav(path_cut,nb_frames_before_onset):
+def create_csv_from_cut_wav(path_cut,nb_frames_before_onset,nb_frames_after_offset):
     #print("TO DO: verify if max supposed to be is max frames or max duration")
     l_folders = os.listdir(path_cut)
     l_csv = []
@@ -121,19 +141,25 @@ def create_csv_from_cut_wav(path_cut,nb_frames_before_onset):
         l_wav = os.listdir(path_cut+folder)
         
         for elem in l_wav:
+            
             if "response" in elem:
                 label = 0
             else :
                 label = 1
                 
-            with contextlib.closing(wave.open(path_cut+'/'+folder+'/'+elem,'r')) as f:
-                frames = f.getnframes()+nb_frames_before_onset
-            if f.getnframes() > 1000:
-                l_csv.append([elem,label,frames,folder])
-        
+            #with contextlib.closing(wave.open(path_cut+'/'+folder+'/'+elem,'r')) as f:
+            
+            soundData, sample_rate = torchaudio.load(path_cut+'/'+folder+'/'+elem,normalize=True)
+            mfcc = torchaudio.transforms.MFCC(sample_rate=sample_rate)(soundData)
+            mfcc_size = mfcc.shape[-1]
+            frames = soundData.shape[-1]
+            #frames = f.getnframes()+nb_frames_before_onset+nb_frames_after_offset
+            if frames > 1000:
+                l_csv.append([elem,label,frames+nb_frames_before_onset+nb_frames_after_offset,folder,mfcc_size])
+
     df = pd.DataFrame(l_csv) 
-    df.columns =['filename', 'label', 'nbframes','folder']
-    df.to_csv(path_cut+'filenames_labels_nbframes.csv') 
+    df.columns =['filename', 'label', 'nbframes','folder','mfcc_size']
+    df.to_csv(path_cut+'filenames_labels_nbframes2.csv') 
     return df
         
 
@@ -142,11 +168,13 @@ def create_csv_from_cut_wav(path_cut,nb_frames_before_onset):
 
 path_rec = "../data/Adult-rec/"
 path_annot = "../data/Annotations-adults/"
-path_cut = "../data/cut_wav_with_data_before_onset/"
-nb_frames_before_onset = 100000
+path_cut = "../data/cut_wav_with_data_before_onset_without_BC/"
+path_cut = "../data/cut_wav_with_data_before_onset_without_BC_from_mp4/"
+nb_frames_before_onset = 50000
+nb_frames_after_offset = 5000
 
+#convert_to_wav(path_rec,'mp4')
 
-convert_to_wav("../data/Adult-rec/")
-cut_all_wav(path_rec,path_annot,path_cut,nb_frames_before_onset)
-df = create_csv_from_cut_wav(path_cut,nb_frames_before_onset)
+#cut_all_wav(path_rec,path_annot,path_cut,nb_frames_before_onset,nb_frames_after_offset,True)
+df = create_csv_from_cut_wav(path_cut,nb_frames_before_onset,nb_frames_after_offset)
 

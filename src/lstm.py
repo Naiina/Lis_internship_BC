@@ -14,6 +14,8 @@ import pandas as pd
 import torch.nn as nn
 import torch.nn.functional as F
 import os
+from scipy.io import wavfile
+import csv
 
 
 
@@ -40,21 +42,21 @@ class UrbanSoundDataset(Dataset):
                 self.labels.append(csvData.iloc[i, 2])
                 self.folders.append(csvData.iloc[i, 4])
         self.path_cut = path_cut
-        self.max = csvData['nbframes'].max()
+        self.max = csvData['mfcc_size'].max()
         self.folderList = folderList
         
         
 
     def __getitem__(self, index):
         # format the file path and load the file
-        max_frames = int(self.max/150)
+        #max_frames = int(self.max/150)
         path = self.path_cut + str(self.folders[index]) + "/" +self.file_names[index]
         soundData, sample_rate = torchaudio.load(path)
         #print(path,soundData.shape)
         mfcc = torchaudio.transforms.MFCC(sample_rate=sample_rate)(soundData)
         mfcc_temporal_size = mfcc.shape[2]
         #soundData = torch.mean(sound, dim=0, keepdim=True)
-        padded_mfcc = torch.zeros([1,40, max_frames])  # tempData accounts for audio clips that are too short
+        padded_mfcc = torch.zeros([1,40, self.max])  # tempData accounts for audio clips that are too short
         
        
         padded_mfcc[:,:, :mfcc_temporal_size] = mfcc
@@ -80,7 +82,7 @@ class UrbanSoundDataset(Dataset):
 
 class AudioLSTM(nn.Module):
 
-    def __init__(self, n_feature=5, out_feature=5, n_hidden=256, n_layers=2, drop_prob=0.5):
+    def __init__(self, n_feature=5, out_feature=5, n_hidden=256, n_layers=2, drop_prob=0.1):
         super().__init__()
         self.drop_prob = drop_prob
         self.n_layers = n_layers
@@ -124,7 +126,7 @@ class AudioLSTM(nn.Module):
     
         
 def train(model, epoch):
-    
+    l_loss = []
     model.train()
     for batch_idx, (data, target, seq_len) in enumerate(train_loader):
         #print(target)
@@ -143,6 +145,8 @@ def train(model, epoch):
         print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
             epoch, batch_idx * len(data), len(train_loader.dataset),
             100. * batch_idx / len(train_loader), loss))
+        l_loss.append(loss.data.item())
+    return l_loss
             
             
 def test(model, epoch):
@@ -162,8 +166,7 @@ def test(model, epoch):
     print('\nTest set: Accuracy: {}/{} ({:.0f}%)\n'.format(
         correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
-    
-hyperparameters = {"lr": 0.01, "weight_decay": 0.0001, "batch_size": 20, "in_feature": 40, "out_feature": 2}
+
 
 device = torch.device("cpu")
 print(device)
@@ -171,16 +174,21 @@ print(device)
 #csv_path = '/kaggle/input/urbansound8k/UrbanSound8K.csv'
 #file_path = '/kaggle/input/urbansound8k/'
 
-path_cut_before = "../data/cut_wav_with_data_before_onset/"
+path_cut_before = "../data/cut_wav_with_data_before_onset_without_BC_from_mp4/"
 csv_filename = "filenames_labels_nbframes.csv"
 l_folders = [elem for elem in os.listdir(path_cut_before) if os.path.isdir(path_cut_before+elem)]
 
-train_set = UrbanSoundDataset(csv_filename, path_cut_before, l_folders[:-1] )
-test_set = UrbanSoundDataset(csv_filename, path_cut_before,l_folders[-1])
+train_set = UrbanSoundDataset(csv_filename, path_cut_before, l_folders[:-2] )
+test_set = UrbanSoundDataset(csv_filename, path_cut_before,l_folders[-2])
+validation_set = UrbanSoundDataset(csv_filename, path_cut_before,l_folders[-1])
 
 #print("Train set size: " + str(len(train_set)))
 #print("Test set size: " + str(len(test_set)))
 
+#TO INVESTIGATE: No batch size > test_set/2, because drop last batch is smaller the the others 
+batch_size = len(train_set)//2 
+hyperparameters = {"lr": 0.001, "weight_decay": 0.0001, "batch_size": batch_size, "in_feature": 40, "out_feature": 2}
+#hyperparameters = {"lr": 0.01, "weight_decay": 0.0001, "batch_size": 20, "in_feature": 40, "out_feature": 2}
 
 
 
@@ -199,13 +207,26 @@ criterion = nn.CrossEntropyLoss()
 clip = 5  # gradient clipping
 
 log_interval = 10
-for epoch in range(1, 41):
+l_l_loss = []
+for epoch in range(1, 3):
     # scheduler.step()
-    train(model, epoch)
+    l_loss = train(model, epoch)
+    l_l_loss.append(l_loss)
     test(model, epoch)
     
-    
-    
 
+l_l_loss.to_csv(path_cut_before,)
+
+
+
+with open('GFG2.csv', 'w') as f:
+    i = 0
+    # using csv.writer method from CSV package
+    write = csv.writer(f)
     
+    for k in hyperparameters.keys():
+        write.writerows([k,str(hyperparameters[k])])
+    for elem in l_l_loss:
+        i+=1
+        write.writerow("epoch",i,elem)
     
